@@ -21,6 +21,13 @@ data VectorT' (n :: Nat) m a where
   VNil :: VectorT' 0 m a
   VCons :: a -> VectorT n m a -> VectorT' (n + 1) m a
 
+data VectorT'' (n :: Nat) m a where
+  VNil' :: VectorT'' 0 m a
+  VCons' :: m (a, VectorT'' n m a) -> VectorT'' (n + 1) m a
+
+cons'' :: Functor m => m a -> VectorT'' n m a -> VectorT'' (n + 1) m a
+cons'' ma mas = VCons' $ ( , mas) <$> ma
+
 -- FIXME look at all the classes vector-sized has and get them as well
 
 newtype VectorT (n :: Nat) m a = VectorT { getVectorT :: m (VectorT' n m a) }
@@ -28,6 +35,10 @@ newtype VectorT (n :: Nat) m a = VectorT { getVectorT :: m (VectorT' n m a) }
 deriving instance ((forall x . Show x => Show (m x)), Show a) => Show (VectorT n m a)
 deriving instance ((forall x . Show x => Show (m x)), Show a) => Show (VectorT' n m a)
 
+deriving instance ((forall x . Show x => Show (m x)), Show a) => Show (VectorT n m a)
+deriving instance ((forall x . Show x => Show (m x)), Show a) => Show (VectorT' n m a)
+
+deriving instance Functor m => Functor (VectorT'' n m)
 deriving instance Functor m => Functor (VectorT' n m)
 deriving instance Functor m => Functor (VectorT n m)
 
