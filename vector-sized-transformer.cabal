@@ -61,6 +61,8 @@ common options
       , ghc-typelits-natnormalise ^>= 0.7.8
     default-extensions:
         DataKinds
+        GADTs
+        TypeFamilies
 
 library
     import:           options
@@ -71,8 +73,7 @@ library
         Data.Vector.Sized.Trans.Some
 
     -- Modules included in this library but not exported.
-    other-modules:
-        Data.Vector.Sized.Trans.Singleton
+    -- other-modules:
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
