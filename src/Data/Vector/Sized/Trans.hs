@@ -3,129 +3,125 @@
 module Data.Vector.Sized.Trans where
 
 -- base
-import Control.Monad ((>=>))
-import Data.Functor.Identity
-import Data.Proxy
+import Control.Arrow (second)
 import GHC.TypeNats
-import Unsafe.Coerce (unsafeCoerce)
+import Prelude hiding (replicate, foldr, mapM, traverse)
+import Data.Functor.Identity
+import Data.Functor.Const
+import Data.Proxy
+import Unsafe.Coerce
+import Control.Monad hiding (replicateM)
 
 -- transformers
-import Control.Monad.Trans.Class (MonadTrans (..))
-import Data.Functor ((<&>))
+import Control.Monad.Trans.Class
 
 -- mmorph
 import Control.Monad.Morph (MFunctor (..))
-import Prelude hiding (mapM, traverse)
 
-data VectorT' (n :: Nat) m a where
-  VNil :: VectorT' 0 m a
-  VCons :: a -> VectorT n m a -> VectorT' (n + 1) m a
+data VectorT (n :: Nat) m a where
+  VNil :: VectorT 0 m a
+  VCons :: m (a, VectorT n m a) -> VectorT (n + 1) m a
 
-data VectorT'' (n :: Nat) m a where
-  VNil' :: VectorT'' 0 m a
-  VCons' :: m (a, VectorT'' n m a) -> VectorT'' (n + 1) m a
+infixr `consM`
 
-cons'' :: Functor m => m a -> VectorT'' n m a -> VectorT'' (n + 1) m a
-cons'' ma mas = VCons' $ ( , mas) <$> ma
+consM :: Functor m => m a -> VectorT n m a -> VectorT (n + 1) m a
+consM ma mas = VCons $ ( , mas) <$> ma
+
+consM' :: Functor m => a -> m (VectorT n m a) -> VectorT (n + 1) m a
+consM' a mas = VCons $ (a, ) <$> mas
 
 -- FIXME look at all the classes vector-sized has and get them as well
 
-newtype VectorT (n :: Nat) m a = VectorT { getVectorT :: m (VectorT' n m a) }
-
 deriving instance ((forall x . Show x => Show (m x)), Show a) => Show (VectorT n m a)
-deriving instance ((forall x . Show x => Show (m x)), Show a) => Show (VectorT' n m a)
 
-deriving instance ((forall x . Show x => Show (m x)), Show a) => Show (VectorT n m a)
-deriving instance ((forall x . Show x => Show (m x)), Show a) => Show (VectorT' n m a)
-
-deriving instance Functor m => Functor (VectorT'' n m)
-deriving instance Functor m => Functor (VectorT' n m)
 deriving instance Functor m => Functor (VectorT n m)
 
-deriving instance Foldable m => Foldable (VectorT' n m)
 deriving instance Foldable m => Foldable (VectorT n m)
-deriving instance (Functor m, Foldable m, Traversable m) => Traversable (VectorT' n m)
 deriving instance (Functor m, Foldable m, Traversable m) => Traversable (VectorT n m)
 
-instance MFunctor (VectorT n) where
-  hoist morph VectorT { getVectorT } = VectorT { getVectorT = morph $ hoist morph <$> getVectorT }
+instance (KnownNat n, Applicative m) => Applicative (VectorT n m) where
+  pure = replicate
 
-instance MFunctor (VectorT' n) where
+  VNil <*> VNil = VNil
+  VCons vf <*> VCons va = VCons $ (\(f, fs) (a, as) -> (f a, fs <*> as)) <$> vf <*> va
+
+instance MFunctor (VectorT n) where
   hoist _ VNil = VNil
-  hoist morph (VCons a as) = VCons a $ hoist morph as
+  hoist morph (VCons v) = VCons $ morph $ second (hoist morph) <$> v
+
+singleton :: Functor m => m a -> VectorT 1 m a
+singleton = VCons . fmap (, VNil)
 
 instance MonadTrans (VectorT 1) where
-  lift = VectorT . fmap (`VCons` VectorT (pure VNil))
-
-runVectorT :: Monad m => VectorT n m a -> m (VectorT n Identity a)
-runVectorT VectorT { getVectorT } = do
-  vector' <- getVectorT
-  VectorT . pure <$> runVectorT' vector'
-
-runVectorT' :: Monad m => VectorT' n m a -> m (VectorT' n Identity a)
-runVectorT' VNil = pure VNil
-runVectorT' (VCons a mas) = VCons a <$> runVectorT mas
-
-toList :: Monad m => VectorT n m a -> m [a]
-toList = getVectorT >=> toList'
-
-toList' :: (Monad m) => VectorT' n m a -> m [a]
-toList' VNil = pure []
-toList' (VCons a as) = (a :) <$> toList as
-
-uncons :: Functor m => VectorT (n + 1) m a -> m (a, VectorT n m a)
-uncons VectorT { getVectorT } = getVectorT <&> \case VCons a v -> (a, v)
+  lift = singleton
 
 infixr `cons`
 
-cons :: Functor m => m a -> VectorT n m a -> VectorT (n + 1) m a
-cons ma as = VectorT $ (`VCons` as) <$> ma
+cons :: (Applicative m) => a -> VectorT n m a -> VectorT (n + 1) m a
+cons a = consM $ pure a
 
-cons' :: (Functor m, Applicative m) => m a -> VectorT' n m a -> m (VectorT' (n + 1) m a)
-cons' ma as = (`VCons` (VectorT $ pure as)) <$> ma
+runVectorT :: forall m n a . Monad m => VectorT n m a -> m (VectorT n Identity a)
+runVectorT = foldr2 VNil cons
 
-empty :: Applicative m => VectorT 0 m a
-empty = VectorT $ pure VNil
+toList :: Monad m => VectorT n m a -> m [a]
+toList = foldr0 [] (:)
 
-singleton :: Monad m => m a -> VectorT 1 m a
-singleton = lift
+foldr :: Monad m => b 0 -> (forall i . a -> b i -> b (i + 1)) -> VectorT n m a -> m (b n)
+foldr start _ VNil = return start
+foldr start step (VCons v) = do
+  (a, as) <- v
+  accum <- foldr start step as
+  return $ step a accum
 
-append :: Applicative m => VectorT n1 m a -> VectorT n2 m a -> VectorT (n1 + n2) m a
-append v1 v2 = VectorT $ append'' <$> getVectorT v1 <*> getVectorT v2
+foldr0 :: Monad m => b -> (a -> b -> b) -> VectorT n m a -> m b
+foldr0 start step = fmap getConst . foldr (Const start) ((. getConst) . (Const .) . step)
 
--- FIXME inline?
-append' :: Functor m => VectorT n1 m a -> VectorT' n2 m a -> VectorT (n1 + n2) m a
-append' VectorT { getVectorT } v2 = VectorT $ (`append''` v2) <$> getVectorT
+newtype Wrap1 f a n = Wrap1 { getWrap1 :: f n a }
 
-append'' :: Functor m => VectorT' n1 m a -> VectorT' n2 m a -> VectorT' (n1 + n2) m a
-append'' VNil v = v
-append'' (VCons a v1) v2 = VCons a $ append' v1 v2
+foldr1 :: Monad m => f 0 a -> (forall i . a -> f i a -> f (i + 1) a) -> VectorT n m a -> m (f n a)
+foldr1 start step = fmap getWrap1 . foldr (Wrap1 start) ((. getWrap1) . (Wrap1 .) . step)
+
+newtype Wrap2 f x a n = Wrap2 { getWrap2 :: f n x a }
+
+foldr2 :: Monad m => f 0 x b -> (forall i . a -> f i x b -> f (i + 1) x b) -> VectorT n m a -> m (f n x b)
+foldr2 start step = fmap getWrap2 . foldr (Wrap2 start) ((. getWrap2) . (Wrap2 .) . step)
+
+foldrM2 :: Monad m => f 0 m b -> (forall i . a -> f i m b -> m (f (i + 1) m b)) -> VectorT n m a -> m (f n m b)
+foldrM2 start step = getWrapM2 <=< foldr (WrapM2 $ pure start) (\a WrapM2 { getWrapM2 } -> WrapM2 $ step a =<< getWrapM2)
+
+newtype WrapM2 f m a n = WrapM2 { getWrapM2 :: m (f n m a) }
 
 
-head' :: VectorT' n m a -> Maybe a
-head' VNil = Nothing
-head' (VCons a _) = Just a
+uncons :: Functor m => VectorT (n + 1) m a -> m (a, VectorT n m a)
+uncons (VCons v) = v
 
-headSafe' :: VectorT' (n + 1) m a -> a
-headSafe' (VCons a _) = a
+append :: Functor m => VectorT n1 m a -> VectorT n2 m a -> VectorT (n1 + n2) m a
+append VNil v = v
+append (VCons v1) v2 = VCons $ second (append v2) <$> v1
 
-headSafe :: Functor m => VectorT (n + 1) m a -> m a
-headSafe = fmap headSafe' . getVectorT
+head :: Functor m => VectorT (n + 1) m a -> m a
+head = fmap fst . uncons
 
-replicateM :: (KnownNat n, Applicative m) => m a -> VectorT n m a
-replicateM ma = replicateS ma sing
+headMaybe :: Functor m => VectorT n m a -> Maybe (m a)
+headMaybe VNil = Nothing
+headMaybe (VCons v) = Just $ fst <$> v
 
 data Sing (n :: Natural) where
   Z :: Sing 0
   S :: Sing n -> Sing (n + 1)
 
-replicateS :: Applicative m => m a -> Sing n -> VectorT n m a
-replicateS _ Z = VectorT $ pure VNil
-replicateS ma (S n) = ma `cons` replicateS ma n
+replicate :: (KnownNat n, Applicative m) => a -> VectorT n m a
+replicate = replicateM . pure
 
-replicateS' :: (Functor m, Monad m) => m a -> Sing n -> m (VectorT' n m a)
-replicateS' _ Z = pure VNil
-replicateS' ma (S n) = cons' ma =<< replicateS' ma n
+replicateM :: (Functor m, KnownNat n) => m a -> VectorT n m a
+replicateM ma = replicateS ma sing
+
+replicateS :: Functor m => m a -> Sing n -> VectorT n m a
+replicateS ma = build $ consM ma
+
+build :: (forall i . VectorT i m a -> VectorT (i + 1) m a) -> Sing n -> VectorT n m a
+build _ Z = VNil
+build increase (S n) = increase $ build increase n
 
 sing :: forall n. KnownNat n => Sing n
 sing = case natVal (Proxy @n) of
@@ -136,35 +132,36 @@ sing = case natVal (Proxy @n) of
   singAt :: KnownNat m => Proxy m -> Sing m
   singAt = const sing
 
-push :: Monad m => m (VectorT n m a) -> VectorT n m a
-push mas = VectorT $ do
-  VectorT { getVectorT } <- mas
-  getVectorT
+mapM :: Monad m => (a -> m b) -> VectorT n m a -> m (VectorT n m b)
+mapM f = foldr2 VNil $ \a v -> VCons $ (, v) <$> f a
 
-mapM :: Monad m => (a -> m b) -> VectorT n m a -> VectorT n m b
-mapM f VectorT { getVectorT } = VectorT $ mapM' f =<< getVectorT
+data Partition n m a = forall i j . (i + j ~ n) => Partition (VectorT i m a) (VectorT j m a)
 
-mapM' :: Monad m => (a -> m b) -> VectorT' n m a -> m (VectorT' n m b)
-mapM' _ VNil = pure VNil
-mapM' f (VCons a as) = VCons <$> f a <*> pure (mapM f as)
+deriving instance (Show a, forall x . Show x => Show (m x)) => Show (Partition n m a)
 
-findFirst :: Monad m => (a -> Bool) -> VectorT n m a -> m (Either (VectorT n m a) (Found n m a))
-findFirst p VectorT { getVectorT } = getVectorT >>= findFirst' p
-findFirst' :: Monad m => (a -> Bool) -> VectorT' n m a -> m (Either (VectorT n m a) (Found n m a))
-findFirst' _ VNil = pure $ Left $ VectorT $ pure VNil
--- FIXME Rewrite with fmap
-findFirst' p (VCons a as) = if p a then pure $ Right $ Found a as else do
-  foundMaybe <- findFirst p as
-  case foundMaybe of
-    Left as' -> pure $ Left $ pure a `cons` as'
-    Right (Found a' as') -> pure $ Right $ Found a' $ VectorT $ pure $ VCons a as'
+withPartition :: (forall i j . (i + j ~ n) => VectorT i m a -> VectorT j m a -> b n) -> Partition n m a -> b n
+withPartition f (Partition v1 v2) = f v1 v2
+
+withPartition2 :: (forall i j . (i + j ~ n) => VectorT i m a -> VectorT j m a -> f n x y) -> Partition n m a -> f n x y
+withPartition2 f (Partition v1 v2) = f v1 v2
+
+partition :: Monad m => (a -> Bool) -> VectorT n m a -> m (Partition n m a)
+partition _ VNil = pure $ Partition VNil VNil
+partition p (VCons v) = do
+  (a, as) <- v
+  Partition v1 v2 <- partition p as
+  return $ if p a
+    then Partition (a `cons` v1) v2
+    else Partition v1 (a `cons` v2)
 
 data Found n m a where
   Found :: a -> VectorT n m a -> Found (n + 1) m a
 
-data Split n m a = forall i j . (i + j ~ n) => Split (VectorT i m a) (VectorT j m a)
-
-glue :: Applicative m => Split n m a -> VectorT n m a
-glue (Split v1 v2) = append v1 v2
-
 deriving instance (Show a, forall x . Show x => Show (m x)) => Show (Found n m a)
+
+find :: Monad m => (a -> Bool) -> VectorT n m a -> m (Either (VectorT n m a) (Found n m a))
+find p v = partition p v >>= \case
+  (Partition VNil v2) -> return $ Left v2
+  (Partition (VCons v1) v2) -> do
+    (a, as) <- v1
+    return $ Right $ Found a $ append as v2
