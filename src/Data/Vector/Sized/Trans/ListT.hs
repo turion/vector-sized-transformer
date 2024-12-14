@@ -1,25 +1,28 @@
 module Data.Vector.Sized.Trans.ListT where
 
 -- base
-import Control.Monad (join)
-
--- transformers
-import Control.Monad.Trans.Class (lift)
+import Control.Arrow (second)
 
 -- list-t
 import ListT hiding (cons)
-import ListT qualified
 
 -- vector-sized-transformer
-import Data.Vector.Sized.Trans.Some
 import Data.Vector.Sized.Trans hiding (cons)
+import Data.Vector.Sized.Trans.Some
 
+{- |
+Note that it is not possible to relax the constraint to @'Functor' m@,
+although one might believe so,
+because the result vector knows its length after one action in @m@,
+while the argument of type @'ListT' m a@ only knows it after it has traversed the whole list.
+Hence, all the steps of it must be joined first.
+-}
 fromListT :: Monad m => ListT m a -> m (SomeVectorT m a)
-fromListT = fold (\as a -> pure (pure a `cons` as)) mempty
+fromListT = fold (\as a -> return $ cons a as) mempty
 
-toListT :: Monad m => VectorT n m a -> ListT m a
-toListT = join . lift . fmap toListT' . getVectorT
-
-toListT' :: Monad m => VectorT' n m a -> ListT m a
-toListT' VNil = mempty
-toListT' (VCons a as) = ListT.cons a $ toListT as
+{- |
+Actually, 'Applicative' is only used for the construction of the empty list
+-}
+toListT :: Applicative m => VectorT n m a -> ListT m a
+toListT VNil = ListT $ pure Nothing
+toListT (VCons v) = ListT $ Just . second toListT <$> v

@@ -54,7 +54,7 @@ extra-doc-files:    CHANGELOG.md
 common options
     ghc-options: -Wall -fplugin GHC.TypeLits.KnownNat.Solver -fplugin GHC.TypeLits.Normalise
     build-depends:
-        base ^>=4.16.4.0
+        base >=4.16 && <= 4.18
       , transformers ^>= 0.5
       , mmorph ^>= 1.2
       , ghc-typelits-knownnat ^>= 0.7.8
